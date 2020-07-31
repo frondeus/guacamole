@@ -1,5 +1,11 @@
 use async_trait::async_trait;
-use guacamole::{System, Query};
+use guacamole::{System, Query, Input};
+
+#[derive(Hash, PartialEq, Eq)]
+struct Text;
+impl Input for Text {
+    type Data = String;
+}
 
 // Query doesn't store the output, instead you type `Output = ` and its stored in `System`.
 // Now Lines have to implement Hash.
@@ -13,7 +19,8 @@ impl Query for Lines {
     async fn calc(&self, system: &System) -> Self::Output {
         println!("Calc lines");
 
-        system.text
+        // Now our input is specific kind of query!
+        system.query_ref(Text).await
             .lines()
             .map(ToString::to_string)
             .collect()
@@ -65,7 +72,8 @@ impl Query for Add {
 async fn main() {
     let text = "Foo\n Raven\n Foo";
 
-    let system = System::new(text);
+    let mut system = System::new();
+    system.set_input(Text, text.into()).await;
     let raven_count = system.query(RavenCount).await;
     println!("raven count: {}", raven_count);
 
