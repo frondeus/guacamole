@@ -9,6 +9,10 @@ edition = "2018"
 [dependencies]
 async-trait = "0.1.36"
 tokio = { version = "0.2.22", features = ["sync"] }
+futures = "0.3.5"
+itertools = "0.9.0"
+log = "0.4.11"
 
 [dev-dependencies]
-tokio = { version = "0.2.22", features = ["sync", "rt-threaded", "macros"] }
+tokio = { version = "0.2.22", features = ["sync", "rt-threaded", "macros", "time"] }
+env_logger = "0.7.1"
