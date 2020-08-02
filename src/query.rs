@@ -5,7 +5,7 @@ use std::fmt;
 
 #[async_trait]
 pub trait Query: 'static + Send + Sync + Hash + PartialEq + Eq + fmt::Debug {
-    type Output: Send + Sync + fmt::Debug;
+    type Output: Send + Sync + fmt::Debug + Eq;
 
     async fn calc<S: System>(&self, system: &S) -> Self::Output;
 }
@@ -13,7 +13,7 @@ pub trait Query: 'static + Send + Sync + Hash + PartialEq + Eq + fmt::Debug {
 /// Input is a special kind of query that you can set up.
 /// Input:LData = Query::Output and it implements Default trait
 pub trait Input {
-    type Data: Send + Sync + Default + fmt::Debug;
+    type Data: Send + Sync + Default + fmt::Debug + Eq;
 }
 
 #[async_trait]

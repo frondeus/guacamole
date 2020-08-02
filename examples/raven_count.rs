@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use env_logger::Env;
+use guacamole::test_common::init_log;
 use guacamole::{Input, Query, Runtime, System};
 
 #[derive(Hash, PartialEq, Eq, Debug)]
@@ -68,17 +68,17 @@ impl Query for Add {
 
 #[tokio::main]
 async fn main() {
-    env_logger::init_from_env(Env::default().default_filter_or("debug"));
+    init_log();
 
     let text = "Foo\n Raven\n Foo";
 
     let system = Runtime::default();
     system.set_input(Text, text.into()).await;
     let raven_count = system.query(RavenCount).await;
-    log::info!("raven count: {}", raven_count);
+    tracing::info!("raven count: {}", raven_count);
 
     let raven_count = system.query_ref(RavenCount).await;
-    log::info!("raven count 2: {}", *raven_count);
+    tracing::info!("raven count 2: {}", *raven_count);
 
     // Calc it once
     let added = system
@@ -87,7 +87,7 @@ async fn main() {
             b: "3".into(),
         })
         .await;
-    log::info!("Added: {}", *added);
+    tracing::info!("Added: {}", *added);
 
     // Reuse memoized output
     let added = system
@@ -96,7 +96,7 @@ async fn main() {
             b: "3".into(),
         })
         .await;
-    log::info!("Added 2: {}", *added);
+    tracing::info!("Added 2: {}", *added);
 
     // Different parameters means we have to calculate them again
     let added = system
@@ -105,7 +105,7 @@ async fn main() {
             b: "2".into(),
         })
         .await;
-    log::info!("Added 3: {}", *added);
+    tracing::info!("Added 3: {}", *added);
 
     // But then still we should be able to read memoized output.
     let added = system
@@ -114,5 +114,5 @@ async fn main() {
             b: "3".into(),
         })
         .await;
-    log::info!("Added 4: {}", *added);
+    tracing::info!("Added 4: {}", *added);
 }

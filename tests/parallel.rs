@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use env_logger::Env;
+use guacamole::test_common::init_log;
 use guacamole::{Input, Query, Runtime, System};
 
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
@@ -69,36 +69,41 @@ impl Query for Add {
 macro_rules! assert_query {
     ($system: expr, $rev: expr, $expected: expr, $query: expr) => {
         let (out, rev) = $system.query_rev($query).await;
-        assert_eq!(rev, $rev, "Revision {}", stringify!($query));
+        assert_eq!(
+            format!("{:?}", rev),
+            $rev,
+            "Revision {}",
+            stringify!($query)
+        );
         assert_eq!(out, $expected, "Query output {}", stringify!($query));
     };
 }
 
 #[tokio::test]
-async fn test() {
-    env_logger::init_from_env(Env::default().default_filter_or("debug"));
+async fn parallel() {
+    init_log();
 
     let system = Runtime::default();
     system.set_input(A, "2".into()).await;
     system.set_input(B, "3".into()).await;
 
-    assert_query!(system, 1, "2", A);
-    assert_query!(system, 2, "3", B);
+    assert_query!(system, "R1", "2", A);
+    assert_query!(system, "R2", "3", B);
 
     // Calc it once
-    assert_query!(system, 2, "2 + 3 + 4", Add { c: 4 });
+    assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
 
     // Reuse memoized output
-    assert_query!(system, 2, "2 + 3 + 4", Add { c: 4 });
+    assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
 
     // Different parameters means we have to calculate them again
-    assert_query!(system, 2, "2 + 3 + 1", Add { c: 1 });
+    assert_query!(system, "R2", "2 + 3 + 1", Add { c: 1 });
 
     // But then still we should be able to read memoized output.
-    assert_query!(system, 2, "2 + 3 + 4", Add { c: 4 });
+    assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
 
     system.set_input(A, "X".into()).await;
-    assert_query!(system, 3, "X", A);
+    assert_query!(system, "R3", "X", A);
 
-    assert_query!(system, 3, "X + 3 + 4", Add { c: 4 });
+    assert_query!(system, "R3", "X + 3 + 4", Add { c: 4 });
 }

@@ -1,59 +1,15 @@
-use crate::Query;
+use crate::runtime::dep::{Dep, DepIdx};
+use crate::{DynQuery, Invalidation, Query, Revision, Runtime};
+use async_trait::async_trait;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-pub(crate) struct Outdated;
-
-#[derive(Clone)]
-pub(crate) struct Dep {
-    query_type: TypeId,
-    query_idx: usize,
-    query_rev: usize,
-    query_deps: Vec<Dep>,
-}
-impl Dep {
-    pub fn query_type(&self) -> TypeId {
-        self.query_type
-    }
-
-    pub fn check_outdated(&self, current_rev: usize) -> Result<(), Outdated> {
-        if self.query_rev < current_rev {
-            return Err(Outdated);
-        }
-        Ok(())
-    }
-
-    pub fn deps(&self) -> &[Dep] {
-        &self.query_deps
-    }
-}
-
-impl fmt::Debug for Dep {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Dep {{ {:?}[{}], rev: {}, deps: {:?} }}",
-            self.query_type, self.query_idx, self.query_rev, self.query_deps
-        )
-    }
-}
-
-pub(crate) trait DepsExt {
-    fn last_rev(&self) -> Option<usize>;
-}
-
-impl DepsExt for Vec<Dep> {
-    fn last_rev(&self) -> Option<usize> {
-        self.iter().map(|d| d.query_rev).max()
-    }
-}
-
 pub(crate) struct QueryCell<Q: Query> {
     output: Arc<Q::Output>,
     idx: usize,
-    rev: usize,
+    rev: Revision,
     deps: Vec<Dep>,
 }
 
@@ -70,7 +26,7 @@ impl<Q: Query> fmt::Debug for QueryCell<Q> {
 }
 
 impl<Q: Query> QueryCell<Q> {
-    fn new(output: Arc<Q::Output>, rev: usize, idx: usize, deps: Vec<Dep>) -> Self {
+    fn new(output: Arc<Q::Output>, rev: Revision, idx: usize, deps: Vec<Dep>) -> Self {
         Self {
             output,
             rev,
@@ -83,14 +39,21 @@ impl<Q: Query> QueryCell<Q> {
         self.output
     }
 
-    pub fn rev(&self) -> usize {
+    pub fn rev(&self) -> Revision {
         self.rev
+    }
+
+    pub fn idx(&self) -> usize {
+        self.idx
     }
 
     pub fn as_dep(&self) -> Dep {
         Dep {
-            query_type: TypeId::of::<Q>(),
-            query_idx: self.idx,
+            idx: DepIdx {
+                query_name: std::any::type_name::<Q>(),
+                query_type: TypeId::of::<Q>(),
+                query_idx: self.idx,
+            },
             query_rev: self.rev,
             query_deps: self.deps.clone(),
         }
@@ -98,6 +61,28 @@ impl<Q: Query> QueryCell<Q> {
 
     pub fn deps(&self) -> &[Dep] {
         &self.deps
+    }
+
+    fn update_rev(&mut self, caused_by: DepIdx, rev: Revision) {
+        self.rev = rev;
+
+        fn rec(dep: &mut Dep, caused_by: DepIdx, rev: Revision) -> bool {
+            let changed_children = dep
+                .query_deps
+                .iter_mut()
+                .any(|dep| rec(dep, caused_by, rev));
+
+            if changed_children || dep.idx == caused_by {
+                dep.query_rev = rev;
+                true
+            } else {
+                false
+            }
+        }
+
+        self.deps.iter_mut().for_each(|d| {
+            rec(d, caused_by, rev);
+        });
     }
 }
 
@@ -112,14 +97,36 @@ impl<Q: Query> Clone for QueryCell<Q> {
     }
 }
 
+#[async_trait]
 pub(crate) trait Storage: Any + Send + Sync {
-    fn dep_rev(&self, dep: &Dep) -> usize;
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn dyn_query(&self, dep: &Dep) -> Box<dyn DynQuery>;
+    fn update_output(
+        &mut self,
+        dep: &Dep,
+        caused_by: DepIdx,
+        dyn_output: Box<dyn Any + Send + Sync>,
+        rev: Revision,
+    ) -> Invalidation;
+    fn update_dep_rev(&mut self, dep: &Dep, caused_by: DepIdx, rev: Revision);
+    fn update_rev(&mut self, idx: usize, caused_by: DepIdx, rev: Revision);
+    fn dep_rev(&self, dep: &Dep) -> Revision;
+    fn as_any(&self) -> &(dyn Any + Send + Sync);
+    fn as_any_mut(&mut self) -> &mut (dyn Any + Send + Sync);
+}
+
+struct DynQueryWrapper<Q: Query> {
+    query: Arc<Q>,
+}
+#[async_trait]
+impl<Q: Query> DynQuery for DynQueryWrapper<Q> {
+    async fn calc(&self, system: &Runtime) -> Box<dyn Any + Send + Sync> {
+        let out = self.query.calc(system).await;
+        Box::new(out)
+    }
 }
 
 pub(crate) struct QueryStorage<Q: Query> {
-    queries: HashMap<Q, usize>,
+    queries: HashMap<Arc<Q>, usize>,
     cells: Vec<QueryCell<Q>>,
 }
 
@@ -132,32 +139,93 @@ impl<Q: Query> Default for QueryStorage<Q> {
     }
 }
 
+#[async_trait]
 impl<Q: Query> Storage for QueryStorage<Q> {
-    fn dep_rev(&self, dep: &Dep) -> usize {
-        let idx = dep.query_idx;
+    #[tracing::instrument(skip(self))]
+    fn dyn_query(&self, dep: &Dep) -> Box<dyn DynQuery> {
+        let idx = dep.idx.query_idx;
+        let query = self
+            .queries
+            .iter()
+            .find_map(|(key, &val)| if val == idx { Some(key) } else { None })
+            .unwrap()
+            .clone();
+        Box::new(DynQueryWrapper { query })
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn update_rev(&mut self, idx: usize, caused_by: DepIdx, rev: Revision) {
+        let cell = &mut self.cells[idx];
+        tracing::debug!("From: {:?}", &cell);
+
+        cell.update_rev(caused_by, rev);
+
+        tracing::debug!("To: {:?}", &cell);
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn update_dep_rev(&mut self, dep: &Dep, caused_by: DepIdx, rev: Revision) {
+        let idx = dep.idx.query_idx;
+
+        self.update_rev(idx, caused_by, rev)
+    }
+
+    #[tracing::instrument(skip(self, dyn_output))]
+    fn update_output(
+        &mut self,
+        dep: &Dep,
+        caused_by: DepIdx,
+        dyn_output: Box<dyn Any + Send + Sync>,
+        rev: Revision,
+    ) -> Invalidation {
+        let idx = dep.idx.query_idx;
+        let dyn_output: Box<dyn Any> = dyn_output;
+        let output = dyn_output.downcast::<Q::Output>().unwrap();
+        let cell = &mut self.cells[idx];
+        tracing::debug!("From: {:?}", &cell);
+
+        cell.update_rev(caused_by, rev);
+
+        if *cell.output != *output {
+            cell.output = Arc::from(output);
+
+            tracing::debug!("Into: {:?}", &cell);
+            tracing::debug!("Output is different. Outdated!");
+
+            Invalidation::Outdated(rev, caused_by)
+        } else {
+            tracing::debug!("Into: {:?}", &cell);
+            tracing::debug!("Output is same");
+            Invalidation::Revisioned(rev, caused_by)
+        }
+    }
+
+    fn dep_rev(&self, dep: &Dep) -> Revision {
+        let idx = dep.idx.query_idx;
         self.cells[idx].rev
     }
 
-    fn as_any(&self) -> &dyn Any {
+    fn as_any(&self) -> &(dyn Any + Send + Sync) {
         self
     }
 
-    fn as_any_mut(&mut self) -> &mut dyn Any {
+    fn as_any_mut(&mut self) -> &mut (dyn Any + Send + Sync) {
         self
     }
 }
 
 impl<Q: Query> QueryStorage<Q> {
-    pub fn get(&self, query: &Q) -> &QueryCell<Q> {
+    pub fn get(&self, query: &Q) -> QueryCell<Q> {
         let idx = self.queries[query];
-        &self.cells[idx]
+        let cell = &self.cells[idx];
+        cell.clone()
     }
 
     pub fn insert(
         &mut self,
         query: Q,
         output: Q::Output,
-        rev: usize,
+        rev: Revision,
         deps: Vec<Dep>,
     ) -> QueryCell<Q> {
         let idx = self.queries.get(&query).copied();
@@ -168,7 +236,7 @@ impl<Q: Query> QueryStorage<Q> {
 
                 let cell = QueryCell::new(Arc::new(output), rev, idx, deps);
                 self.cells.push(cell.clone());
-                self.queries.insert(query, idx);
+                self.queries.insert(Arc::new(query), idx);
                 cell
             }
             Some(idx) => {

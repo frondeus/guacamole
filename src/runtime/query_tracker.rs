@@ -1,22 +1,37 @@
+use crate::runtime::Dep;
+use crate::{Query, QueryRef, Runtime, System};
 use async_trait::async_trait;
-use crate::{Runtime, System, Query, QueryRef};
+use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use super::storage::Dep;
 
 pub(super) struct QueryTracker {
     runtime: Runtime,
     deps: Arc<RwLock<Vec<Dep>>>,
 }
 
+impl fmt::Debug for QueryTracker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", &self.runtime)
+    }
+}
 
 impl QueryTracker {
     pub fn new(runtime: &Runtime) -> Self {
-        Self { runtime: runtime.fork(), deps: Default::default() }
+        Self {
+            runtime: runtime.fork(),
+            deps: Default::default(),
+        }
     }
 
     pub fn into_deps(self) -> Vec<Dep> {
         Arc::try_unwrap(self.deps).unwrap().into_inner()
+    }
+
+    #[tracing::instrument(skip(dep))]
+    async fn add_dep(&self, dep: Dep) {
+        tracing::trace!("WRITE RW LOCK");
+        self.deps.write().await.push(dep);
     }
 }
 
@@ -26,19 +41,19 @@ impl System for QueryTracker {
         let cell = self.runtime.query_inner(query).await;
 
         let dep = cell.as_dep();
-        self.deps.write().await.push(dep);
+        self.add_dep(dep).await;
         QueryRef(cell.output())
     }
 
     async fn query<Q>(&self, query: Q) -> <Q as Query>::Output
-        where
-            Q: Query,
-            Q::Output: Clone,
+    where
+        Q: Query,
+        Q::Output: Clone,
     {
         let cell = self.runtime.query_inner(query).await;
 
         let dep = cell.as_dep();
-        self.deps.write().await.push(dep);
+        self.add_dep(dep).await;
 
         let output = cell.output();
         (*output).clone()
