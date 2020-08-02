@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use guacamole::{Input, Query, Guacamole, System};
+use guacamole::{Input, Query, Runtime, System};
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct A;
@@ -36,10 +36,9 @@ macro_rules! assert_query {
     };
 }
 
-
 #[tokio::test]
 async fn test() {
-    let system = Guacamole::default();
+    let system = Runtime::default();
     system.set_input(A, "2".into()).await;
     system.set_input(B, "3".into()).await;
 
@@ -47,54 +46,19 @@ async fn test() {
     assert_query!(system, 2, "3", B);
 
     // Calc it once
-    assert_query!(
-        system,
-        2,
-        "2 + 3 + 4",
-        Add {
-            c: 4,
-        }
-    );
+    assert_query!(system, 2, "2 + 3 + 4", Add { c: 4 });
 
     // Reuse memoized output
-    assert_query!(
-        system,
-        2,
-        "2 + 3 + 4",
-        Add {
-            c: 4,
-        }
-    );
+    assert_query!(system, 2, "2 + 3 + 4", Add { c: 4 });
 
     // Different parameters means we have to calculate them again
-    assert_query!(
-        system,
-        2,
-        "2 + 3 + 1",
-        Add {
-            c: 1,
-        }
-    );
+    assert_query!(system, 2, "2 + 3 + 1", Add { c: 1 });
 
     // But then still we should be able to read memoized output.
-    assert_query!(
-        system,
-        2,
-        "2 + 3 + 4",
-        Add {
-            c: 4,
-        }
-    );
+    assert_query!(system, 2, "2 + 3 + 4", Add { c: 4 });
 
     system.set_input(A, "X".into()).await;
     assert_query!(system, 3, "X", A);
 
-    assert_query!(
-        system,
-        3,
-        "X + 3 + 4",
-        Add {
-            c: 4,
-        }
-    );
+    assert_query!(system, 3, "X + 3 + 4", Add { c: 4 });
 }

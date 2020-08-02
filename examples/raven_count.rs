@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use guacamole::{Input, Query, Guacamole, System};
 use env_logger::Env;
+use guacamole::{Input, Query, Runtime, System};
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct Text;
@@ -72,7 +72,7 @@ async fn main() {
 
     let text = "Foo\n Raven\n Foo";
 
-    let system = Guacamole::default();
+    let system = Runtime::default();
     system.set_input(Text, text.into()).await;
     let raven_count = system.query(RavenCount).await;
     log::info!("raven count: {}", raven_count);

@@ -1,7 +1,7 @@
+use crate::System;
 use async_trait::async_trait;
 use core::hash::Hash;
 use std::fmt;
-use crate::System;
 
 #[async_trait]
 pub trait Query: 'static + Send + Sync + Hash + PartialEq + Eq + fmt::Debug {
