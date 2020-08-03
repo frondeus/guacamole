@@ -91,9 +91,7 @@ impl Runtime {
             .expect("Couldn't downcast to storage");
 
         let rev = Revision(self.counter.fetch_add(1, Ordering::SeqCst));
-        storage
-            .insert(query, output, rev.inc(), Default::default());
-
+        storage.insert(query, output, rev.inc(), Default::default());
     }
 }
 
@@ -159,9 +157,7 @@ impl Runtime {
         {
             let mut guard = self.write_queries().await;
             let storage = guard.get_mut(&type_id).expect("Query dep storage");
-            storage
-                .update_output(dep, caused_by, output, current_rev)
-
+            storage.update_output(dep, caused_by, output, current_rev)
         }
     }
 
@@ -241,7 +237,6 @@ impl Runtime {
                 .downcast_ref::<QueryStorage<Q>>()
                 .expect("Query storage")
                 .contains_query(&query)
-
         };
 
         if !contains_query {
