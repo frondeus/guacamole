@@ -1,29 +1,29 @@
-use core::hash::Hash;
-use async_trait::async_trait;
-// 0.1.36
 use crate::System;
+use async_trait::async_trait;
+use core::hash::Hash;
+use std::fmt;
 
 #[async_trait]
-pub trait Query: 'static + Send + Sync + Hash + PartialEq + Eq {
-    type Output: Send + Sync;
+pub trait Query: 'static + Send + Sync + Hash + PartialEq + Eq + fmt::Debug {
+    type Output: Send + Sync + fmt::Debug + Eq;
 
-    async fn calc(&self, system: &System) -> Self::Output;
+    async fn calc<S: System>(&self, system: &S) -> Self::Output;
 }
 
 /// Input is a special kind of query that you can set up.
 /// Input:LData = Query::Output and it implements Default trait
 pub trait Input {
-    type Data: Send + Sync + Default;
+    type Data: Send + Sync + Default + fmt::Debug + Eq;
 }
 
 #[async_trait]
-impl<I> Query for I where
-    I: Input + Send + Sync + Hash + PartialEq + Eq + 'static
+impl<I> Query for I
+where
+    I: Input + Send + Sync + Hash + PartialEq + Eq + 'static + fmt::Debug,
 {
     type Output = I::Data;
 
-    async fn calc(&self, _system: &System) -> Self::Output {
+    async fn calc<S: System>(&self, _system: &S) -> Self::Output {
         I::Data::default()
     }
 }
-
