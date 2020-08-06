@@ -12,10 +12,11 @@ Inspired by https://github.com/salsa-rs/salsa
 * Revision system
 * Dependency tracking
 * Output tracking
+* Cycle detection
+* Strong consistency
 
 ## TODO
 * [ ] Cancellation
-* [ ] Cycle detection
 
 ## Contribution
 Feel free to fork, create issues and PRs. I appreciate all kinds of contributions.
