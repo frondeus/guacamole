@@ -1,13 +1,48 @@
 use crate::runtime::dep::{Dep, DepIdx};
-use crate::{DynQuery, Invalidation, Query, Revision, Runtime};
+use crate::{DynQuery, Invalidation, Query, Revision, Runtime, ForkId};
 use async_trait::async_trait;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use tokio::sync::RwLock;
+
+#[derive(Clone, Copy)]
+pub(crate) struct CycleDetected;
+
+#[derive(Debug)]
+pub(crate) enum QueryOutput<Q: Query> {
+    Calculating(ForkId, Revision, Arc<RwLock<()>>),
+    Calculated(Arc<Q::Output>)
+}
+
+impl<Q: Query> Clone for QueryOutput<Q> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Calculated(out) => Self::Calculated(out.clone()),
+            Self::Calculating(fork, rev, lock) => Self::Calculating(*fork, *rev, lock.clone())
+        }
+    }
+}
+
+impl<Q: Query> QueryOutput<Q> {
+    pub fn unwrap(self) -> Arc<Q::Output> {
+        match self {
+            Self::Calculated(out) => out,
+            Self::Calculating(fork, rev, _lock) => panic!("Still calculating by {:?} {:?}", fork, rev)
+        }
+    }
+
+    pub fn unwrap_ref(&self) -> &Arc<Q::Output> {
+        match self {
+            Self::Calculated(out) => out,
+            Self::Calculating(fork, rev, _lock) => panic!("Still calculating by {:?} {:?}", fork, rev)
+        }
+    }
+}
 
 pub(crate) struct QueryCell<Q: Query> {
-    output: Arc<Q::Output>,
+    output: QueryOutput<Q>,// Arc<Q::Output>,
     idx: usize,
     rev: Revision,
     deps: Vec<Dep>,
@@ -26,16 +61,25 @@ impl<Q: Query> fmt::Debug for QueryCell<Q> {
 }
 
 impl<Q: Query> QueryCell<Q> {
-    fn new(output: Arc<Q::Output>, rev: Revision, idx: usize, deps: Vec<Dep>) -> Self {
+    fn calculated(output: Arc<Q::Output>, rev: Revision, idx: usize, deps: Vec<Dep>) -> Self {
         Self {
-            output,
+            output: QueryOutput::Calculated(output),
             rev,
             idx,
             deps,
         }
     }
 
-    pub fn output(self) -> Arc<Q::Output> {
+    fn calculating(fork: ForkId, rev: Revision, idx: usize, lock: Arc<RwLock<()>>) -> Self {
+        Self {
+            output: QueryOutput::Calculating(fork, rev, lock),
+            rev,
+            idx,
+            deps: Default::default(),
+        }
+    }
+
+    pub fn output(self) -> QueryOutput<Q> {
         self.output
     }
 
@@ -61,6 +105,28 @@ impl<Q: Query> QueryCell<Q> {
 
     pub fn deps(&self) -> &[Dep] {
         &self.deps
+    }
+
+
+    pub fn on_cycle(&mut self, query: &Q) {
+        let o = query.on_cycle();
+        self.output = QueryOutput::Calculated(Arc::new(o));
+    }
+
+    pub fn detect_cycle_or_lock(&self, current_fork: ForkId, current_rev: Revision) -> Result<Option<Arc<RwLock<()>>>, CycleDetected> {
+        let output = &self.output;
+        match output {
+            QueryOutput::Calculating(fork, rev, lock) => {
+                tracing::warn!("Calculating {:?}, {:?}. Current {:?}, {:?}",
+                    fork, rev, current_fork, current_rev
+                );
+                if *fork == current_fork && *rev == current_rev {
+                    return Err(CycleDetected);
+                }
+                Ok(Some(lock.clone()))
+            },
+            _ => Ok(None)
+        }
     }
 
     fn update_rev(&mut self, caused_by: DepIdx, rev: Revision) {
@@ -100,7 +166,7 @@ impl<Q: Query> Clone for QueryCell<Q> {
 #[async_trait]
 pub(crate) trait Storage: Any + Send + Sync {
     fn dyn_query(&self, dep: &Dep) -> Box<dyn DynQuery>;
-    fn update_output(
+    fn update_output_dyn(
         &mut self,
         dep: &Dep,
         caused_by: DepIdx,
@@ -171,7 +237,7 @@ impl<Q: Query> Storage for QueryStorage<Q> {
     }
 
     #[tracing::instrument(skip(self, dyn_output))]
-    fn update_output(
+    fn update_output_dyn(
         &mut self,
         dep: &Dep,
         caused_by: DepIdx,
@@ -186,8 +252,8 @@ impl<Q: Query> Storage for QueryStorage<Q> {
 
         cell.update_rev(caused_by, rev);
 
-        if *cell.output != *output {
-            cell.output = Arc::from(output);
+        if **cell.output.unwrap_ref() != *output {
+            cell.output = QueryOutput::Calculated(Arc::from(output));
 
             tracing::debug!("Into: {:?}", &cell);
             tracing::debug!("Output is different. Outdated!");
@@ -215,15 +281,44 @@ impl<Q: Query> Storage for QueryStorage<Q> {
 }
 
 impl<Q: Query> QueryStorage<Q> {
-    pub fn get(&self, query: &Q) -> QueryCell<Q> {
+    pub fn get(&self, query: &Q) -> &QueryCell<Q> {
         let idx = self.queries[query];
         let cell = &self.cells[idx];
-        cell.clone()
+
+        cell
     }
 
-    pub fn insert(
+    pub fn insert_calculating(
         &mut self,
-        query: Q,
+        query: Arc<Q>,
+        fork: ForkId,
+        current_rev: Revision,
+        lock: Arc<RwLock<()>>
+    ) -> QueryCell<Q> {
+        let idx = self.queries.get(&query).copied();
+
+        match idx {
+            None => {
+                let idx = self.cells.len();
+
+                let cell = QueryCell::calculating(fork, current_rev, idx, lock);
+                self.cells.push(cell.clone());
+                self.queries.insert(query, idx);
+                cell
+            }
+            Some(idx) => {
+                let cell = &mut self.cells[idx];
+                cell.output = QueryOutput::Calculating(fork, current_rev, lock);
+                cell.rev = current_rev;
+
+                cell.clone()
+            }
+        }
+    }
+
+    pub fn insert_calculated(
+        &mut self,
+        query: Arc<Q>,
         output: Q::Output,
         rev: Revision,
         deps: Vec<Dep>,
@@ -234,14 +329,14 @@ impl<Q: Query> QueryStorage<Q> {
             None => {
                 let idx = self.cells.len();
 
-                let cell = QueryCell::new(Arc::new(output), rev, idx, deps);
+                let cell = QueryCell::calculated(Arc::new(output), rev, idx, deps);
                 self.cells.push(cell.clone());
-                self.queries.insert(Arc::new(query), idx);
+                self.queries.insert(query, idx);
                 cell
             }
             Some(idx) => {
                 let cell = &mut self.cells[idx];
-                cell.output = Arc::new(output);
+                cell.output = QueryOutput::Calculated(Arc::new(output));
                 cell.rev = rev;
                 cell.deps = deps;
 

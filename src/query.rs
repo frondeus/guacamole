@@ -8,6 +8,10 @@ pub trait Query: 'static + Send + Sync + Hash + PartialEq + Eq + fmt::Debug {
     type Output: Send + Sync + fmt::Debug + Eq;
 
     async fn calc<S: System>(&self, system: &S) -> Self::Output;
+
+    fn on_cycle(&self) -> Self::Output {
+        panic!("Cycle detected")
+    }
 }
 
 /// Input is a special kind of query that you can set up.

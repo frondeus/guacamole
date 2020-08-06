@@ -10,6 +10,7 @@ mod system;
 pub(crate) use dyn_query::DynQuery;
 pub(crate) use invalidation::Invalidation;
 pub(crate) use runtime::DepIdx;
+pub(crate) use system::ForkId;
 
 pub use query::{Input, Query};
 pub use query_ref::QueryRef;

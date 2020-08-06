@@ -12,24 +12,15 @@ impl Input for File {
 pub struct Count;
 #[async_trait]
 impl Query for Count {
-    type Output = ();
+    type Output = Option<()>;
 
-    async fn calc<S: System>(&self, system: &S) {
+    async fn calc<S: System>(&self, system: &S) -> Option<()> {
         let _file = system.query_ref(File).await; // I do absolutely nothing with it.
 
-        system.query_ref(Count).await;
+        system.query(Count).await
     }
-}
 
-#[derive(Hash, PartialEq, Eq, Debug)]
-pub struct ProcessCounted;
-#[async_trait]
-impl Query for ProcessCounted {
-    type Output = ();
-
-    async fn calc<S: System>(&self, system: &S) {
-        system.query(Count).await;
-    }
+    fn on_cycle(&self) -> Option<()> { None }
 }
 
 macro_rules! assert_query {
@@ -56,16 +47,5 @@ async fn cycle() {
     assert_query!(system, "R1", "1", File);
 
     tracing::info!("Process once");
-    assert_query!(system, "R1", (), ProcessCounted);
-
-    tracing::info!("Load cached");
-    assert_query!(system, "R1", (), ProcessCounted);
-
-    tracing::info!("Meaningfull change");
-    system.set_input(File, "2".into()).await;
-    assert_query!(system, "R2", "2", File);
-
-    tracing::info!("Process second time");
-    // Because () == (), we dont have to process Counted again
-    assert_query!(system, "R1", (), ProcessCounted);
+    assert_query!(system, "R1", None, Count);
 }

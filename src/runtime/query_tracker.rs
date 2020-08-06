@@ -19,7 +19,7 @@ impl fmt::Debug for QueryTracker {
 impl QueryTracker {
     pub fn new(runtime: &Runtime) -> Self {
         Self {
-            runtime: runtime.fork(),
+            runtime: runtime.fork_no_inc(),
             deps: Default::default(),
         }
     }
@@ -42,7 +42,7 @@ impl System for QueryTracker {
 
         let dep = cell.as_dep();
         self.add_dep(dep).await;
-        QueryRef(cell.output())
+        QueryRef(cell.output().unwrap())
     }
 
     async fn query<Q>(&self, query: Q) -> <Q as Query>::Output
@@ -55,7 +55,7 @@ impl System for QueryTracker {
         let dep = cell.as_dep();
         self.add_dep(dep).await;
 
-        let output = cell.output();
+        let output = cell.output().unwrap();
         (*output).clone()
     }
 
