@@ -66,53 +66,54 @@ impl Query for Add {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     init_log();
 
     let text = "Foo\n Raven\n Foo";
 
     let system = Runtime::default();
-    system.set_input(Text, text.into()).await;
-    let raven_count = system.query(RavenCount).await;
-    tracing::info!("raven count: {}", raven_count);
+    smol::run(async move {
+        system.set_input(Text, text.into()).await;
+        let raven_count = system.query(RavenCount).await;
+        tracing::info!("raven count: {}", raven_count);
 
-    let raven_count = system.query_ref(RavenCount).await;
-    tracing::info!("raven count 2: {}", *raven_count);
+        let raven_count = system.query_ref(RavenCount).await;
+        tracing::info!("raven count 2: {}", *raven_count);
 
-    // Calc it once
-    let added = system
-        .query_ref(Add {
-            a: 2,
-            b: "3".into(),
-        })
-        .await;
-    tracing::info!("Added: {}", *added);
+        // Calc it once
+        let added = system
+            .query_ref(Add {
+                a: 2,
+                b: "3".into(),
+            })
+            .await;
+        tracing::info!("Added: {}", *added);
 
-    // Reuse memoized output
-    let added = system
-        .query_ref(Add {
-            a: 2,
-            b: "3".into(),
-        })
-        .await;
-    tracing::info!("Added 2: {}", *added);
+        // Reuse memoized output
+        let added = system
+            .query_ref(Add {
+                a: 2,
+                b: "3".into(),
+            })
+            .await;
+        tracing::info!("Added 2: {}", *added);
 
-    // Different parameters means we have to calculate them again
-    let added = system
-        .query_ref(Add {
-            a: 3,
-            b: "2".into(),
-        })
-        .await;
-    tracing::info!("Added 3: {}", *added);
+        // Different parameters means we have to calculate them again
+        let added = system
+            .query_ref(Add {
+                a: 3,
+                b: "2".into(),
+            })
+            .await;
+        tracing::info!("Added 3: {}", *added);
 
-    // But then still we should be able to read memoized output.
-    let added = system
-        .query_ref(Add {
-            a: 2,
-            b: "3".into(),
-        })
-        .await;
-    tracing::info!("Added 4: {}", *added);
+        // But then still we should be able to read memoized output.
+        let added = system
+            .query_ref(Add {
+                a: 2,
+                b: "3".into(),
+            })
+            .await;
+        tracing::info!("Added 4: {}", *added);
+    });
 }

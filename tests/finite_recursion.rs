@@ -23,7 +23,7 @@ impl Query for Count {
 
         COUNTED.fetch_add(1, Ordering::SeqCst);
         tracing::info!("COUNT: {}", self.0);
-        tokio::time::delay_for(tokio::time::Duration::from_secs(1)).await;
+        tokio::time::delay_for(tokio::time::Duration::from_millis(10)).await;
 
         if self.0 > 0 {
             system.query_ref(Count(self.0 - 1)).await;
@@ -56,33 +56,35 @@ macro_rules! assert_query {
     };
 }
 
-#[tokio::test]
-async fn finite_recursion() {
+#[test]
+fn finite_recursion() {
     init_log();
 
     let system = Runtime::default();
 
-    tracing::info!("Set input");
-    system.set_input(File, "1".into()).await;
-    assert_query!(system, "R1", "1", File);
+    smol::run(async move {
+        tracing::info!("Set input");
+        system.set_input(File, "1".into()).await;
+        assert_query!(system, "R1", "1", File);
 
-    tracing::info!("Process once");
-    assert_query!(system, "R1", (), ProcessCounted);
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
-    assert_eq!(COUNTED.load(Ordering::SeqCst), 2, "Counted count");
+        tracing::info!("Process once");
+        assert_query!(system, "R1", (), ProcessCounted);
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
+        assert_eq!(COUNTED.load(Ordering::SeqCst), 2, "Counted count");
 
-    tracing::info!("Load cached");
-    assert_query!(system, "R1", (), ProcessCounted);
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
-    assert_eq!(COUNTED.load(Ordering::SeqCst), 2, "Counted count");
+        tracing::info!("Load cached");
+        assert_query!(system, "R1", (), ProcessCounted);
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
+        assert_eq!(COUNTED.load(Ordering::SeqCst), 2, "Counted count");
 
-    tracing::info!("Meaningfull change");
-    system.set_input(File, "2".into()).await;
-    assert_query!(system, "R2", "2", File);
+        tracing::info!("Meaningfull change");
+        system.set_input(File, "2".into()).await;
+        assert_query!(system, "R2", "2", File);
 
-    tracing::info!("Process second time");
-    // Because () == (), we dont have to process Counted again
-    assert_query!(system, "R1", (), ProcessCounted);
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
-    assert_eq!(COUNTED.load(Ordering::SeqCst), 4, "Counted count");
+        tracing::info!("Process second time");
+        // Because () == (), we dont have to process Counted again
+        assert_query!(system, "R1", (), ProcessCounted);
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
+        assert_eq!(COUNTED.load(Ordering::SeqCst), 4, "Counted count");
+    });
 }

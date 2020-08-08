@@ -11,14 +11,16 @@ with_tests = ["tracing-subscriber"]
 
 [dependencies]
 async-trait = "0.1.36"
-tokio = { version = "0.2.22", features = ["sync"] }
+tokio = { version = "0.2.22", features = ["sync", "parking_lot"] }
 futures = "0.3.5"
 itertools = "0.9.0"
+
 tracing = "0.1.18"
 tracing-futures = "0.2.4"
-
 tracing-subscriber = { version = "0.2.10", optional = true }
+smol = "0.3.3"
 
 [dev-dependencies]
-tokio = { version = "0.2.22", features = ["sync", "rt-threaded", "macros", "time"] }
+tokio = { version = "0.2.22", features = ["sync", "time"] }
+smol = { version = "0.3.3", features = ["tokio02"] }
 tracing-subscriber = "0.2.10"

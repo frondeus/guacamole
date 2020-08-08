@@ -1,6 +1,8 @@
 use crate::runtime::Dep;
 use crate::{Query, QueryRef, Runtime, System};
 use async_trait::async_trait;
+use futures::future::{abortable, Abortable};
+use futures::Future;
 use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -59,10 +61,18 @@ impl System for QueryTracker {
         (*output).clone()
     }
 
-    fn fork(&self) -> Self {
-        Self {
-            runtime: self.runtime.fork(),
+    async fn fork<F, Fut>(&self, f: F) -> Abortable<Fut>
+    where
+        F: Send + Fn(Self) -> Fut,
+        Fut: Send + Future,
+    {
+        let fork = Self {
+            runtime: self.runtime.fork_inner(),
             deps: self.deps.clone(),
-        }
+        };
+        let fut = f(fork);
+        let (fut, handle) = abortable(fut);
+        self.runtime.handles.write().await.push(handle);
+        fut
     }
 }

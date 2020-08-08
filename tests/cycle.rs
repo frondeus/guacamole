@@ -20,7 +20,9 @@ impl Query for Count {
         system.query(Count).await
     }
 
-    fn on_cycle(&self) -> Option<()> { None }
+    fn on_cycle(&self) -> Option<()> {
+        None
+    }
 }
 
 macro_rules! assert_query {
@@ -36,16 +38,17 @@ macro_rules! assert_query {
     };
 }
 
-#[tokio::test]
-async fn cycle() {
+#[test]
+fn cycle() {
     init_log();
 
     let system = Runtime::default();
+    smol::run(async move {
+        tracing::info!("Set input");
+        system.set_input(File, "1".into()).await;
+        assert_query!(system, "R1", "1", File);
 
-    tracing::info!("Set input");
-    system.set_input(File, "1".into()).await;
-    assert_query!(system, "R1", "1", File);
-
-    tracing::info!("Process once");
-    assert_query!(system, "R1", None, Count);
+        tracing::info!("Process once");
+        assert_query!(system, "R1", None, Count);
+    });
 }

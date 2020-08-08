@@ -45,37 +45,39 @@ macro_rules! assert_query {
     };
 }
 
-#[tokio::test]
-async fn dep_tracking() {
+#[test]
+fn dep_tracking() {
     let system = Runtime::default();
-    system.set_input(A, "2".into()).await;
-    system.set_input(B, "3".into()).await;
+    smol::run(async move {
+        system.set_input(A, "2".into()).await;
+        system.set_input(B, "3".into()).await;
 
-    assert_query!(system, "R1", "2", A);
-    assert_query!(system, "R2", "3", B);
+        assert_query!(system, "R1", "2", A);
+        assert_query!(system, "R2", "3", B);
 
-    // Calc it once
-    assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
+        // Calc it once
+        assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
 
-    // Reuse memoized output
-    assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
+        // Reuse memoized output
+        assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
 
-    // Different parameters means we have to calculate them again
-    assert_query!(system, "R2", "2 + 3 + 1", Add { c: 1 });
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 2, "Processed count");
+        // Different parameters means we have to calculate them again
+        assert_query!(system, "R2", "2 + 3 + 1", Add { c: 1 });
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 2, "Processed count");
 
-    // But then still we should be able to read memoized output.
-    assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 2, "Processed count");
+        // But then still we should be able to read memoized output.
+        assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 2, "Processed count");
 
-    system.set_input(A, "X".into()).await;
-    assert_query!(system, "R3", "X", A);
+        system.set_input(A, "X".into()).await;
+        assert_query!(system, "R3", "X", A);
 
-    assert_query!(system, "R3", "X + 3 + 4", Add { c: 4 });
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 3, "Processed count");
+        assert_query!(system, "R3", "X + 3 + 4", Add { c: 4 });
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 3, "Processed count");
 
-    assert_query!(system, "R3", "X + 3 + 4", Add { c: 4 });
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 3, "Processed count");
+        assert_query!(system, "R3", "X + 3 + 4", Add { c: 4 });
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 3, "Processed count");
+    });
 }

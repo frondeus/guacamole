@@ -6,11 +6,13 @@ mod query;
 mod query_ref;
 mod runtime;
 mod system;
+mod reservation;
 
 pub(crate) use dyn_query::DynQuery;
 pub(crate) use invalidation::Invalidation;
 pub(crate) use runtime::DepIdx;
 pub(crate) use system::ForkId;
+pub(crate) use reservation::{Reservation, ReservationReader};
 
 pub use query::{Input, Query};
 pub use query_ref::QueryRef;

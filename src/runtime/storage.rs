@@ -1,26 +1,31 @@
 use crate::runtime::dep::{Dep, DepIdx};
-use crate::{DynQuery, Invalidation, Query, Revision, Runtime, ForkId};
+use crate::{DynQuery, ForkId, Invalidation, Query, Revision, Runtime, ReservationReader, Reservation};
 use async_trait::async_trait;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
-#[derive(Clone, Copy)]
-pub(crate) struct CycleDetected;
+
+#[derive(Clone)]
+pub(crate) enum CycleDetection {
+    CycleDetected,
+    Locked(ReservationReader),
+    Canceled,
+    Ok
+}
 
 #[derive(Debug)]
 pub(crate) enum QueryOutput<Q: Query> {
-    Calculating(ForkId, Revision, Arc<RwLock<()>>),
-    Calculated(Arc<Q::Output>)
+    Calculating(ForkId, Revision, ReservationReader),
+    Calculated(Arc<Q::Output>),
 }
 
 impl<Q: Query> Clone for QueryOutput<Q> {
     fn clone(&self) -> Self {
         match self {
             Self::Calculated(out) => Self::Calculated(out.clone()),
-            Self::Calculating(fork, rev, lock) => Self::Calculating(*fork, *rev, lock.clone())
+            Self::Calculating(fork, rev, lock) => Self::Calculating(*fork, *rev, lock.clone()),
         }
     }
 }
@@ -29,20 +34,24 @@ impl<Q: Query> QueryOutput<Q> {
     pub fn unwrap(self) -> Arc<Q::Output> {
         match self {
             Self::Calculated(out) => out,
-            Self::Calculating(fork, rev, _lock) => panic!("Still calculating by {:?} {:?}", fork, rev)
+            Self::Calculating(fork, rev, _lock) => {
+                panic!("Still calculating by {:?} {:?}", fork, rev)
+            }
         }
     }
 
     pub fn unwrap_ref(&self) -> &Arc<Q::Output> {
         match self {
             Self::Calculated(out) => out,
-            Self::Calculating(fork, rev, _lock) => panic!("Still calculating by {:?} {:?}", fork, rev)
+            Self::Calculating(fork, rev, _lock) => {
+                panic!("Still calculating by {:?} {:?}", fork, rev)
+            }
         }
     }
 }
 
 pub(crate) struct QueryCell<Q: Query> {
-    output: QueryOutput<Q>,// Arc<Q::Output>,
+    output: QueryOutput<Q>, // Arc<Q::Output>,
     idx: usize,
     rev: Revision,
     deps: Vec<Dep>,
@@ -70,7 +79,7 @@ impl<Q: Query> QueryCell<Q> {
         }
     }
 
-    fn calculating(fork: ForkId, rev: Revision, idx: usize, lock: Arc<RwLock<()>>) -> Self {
+    fn calculating(fork: ForkId, rev: Revision, idx: usize, lock: ReservationReader) -> Self {
         Self {
             output: QueryOutput::Calculating(fork, rev, lock),
             rev,
@@ -107,25 +116,35 @@ impl<Q: Query> QueryCell<Q> {
         &self.deps
     }
 
-
     pub fn on_cycle(&mut self, query: &Q) {
         let o = query.on_cycle();
         self.output = QueryOutput::Calculated(Arc::new(o));
     }
 
-    pub fn detect_cycle_or_lock(&self, current_fork: ForkId, current_rev: Revision) -> Result<Option<Arc<RwLock<()>>>, CycleDetected> {
+    pub fn detect_cycle_or_lock(
+        &self,
+        current_fork: ForkId,
+        current_rev: Revision,
+    ) -> CycleDetection {
         let output = &self.output;
         match output {
             QueryOutput::Calculating(fork, rev, lock) => {
-                tracing::warn!("Calculating {:?}, {:?}. Current {:?}, {:?}",
-                    fork, rev, current_fork, current_rev
+                tracing::warn!(
+                    "Calculating {:?}, {:?}. Current {:?}, {:?}",
+                    fork,
+                    rev,
+                    current_fork,
+                    current_rev
                 );
                 if *fork == current_fork && *rev == current_rev {
-                    return Err(CycleDetected);
+                    return CycleDetection::CycleDetected;
                 }
-                Ok(Some(lock.clone()))
-            },
-            _ => Ok(None)
+                else if *rev != current_rev {
+                    return CycleDetection::Canceled;
+                }
+                CycleDetection::Locked(lock.clone())
+            }
+            _ => CycleDetection::Ok,
         }
     }
 
@@ -283,37 +302,39 @@ impl<Q: Query> Storage for QueryStorage<Q> {
 impl<Q: Query> QueryStorage<Q> {
     pub fn get(&self, query: &Q) -> &QueryCell<Q> {
         let idx = self.queries[query];
-        let cell = &self.cells[idx];
-
-        cell
+        &self.cells[idx]
     }
 
-    pub fn insert_calculating(
+    pub fn contains_query(&self, query: &Q) -> bool {
+        self.queries.contains_key(query)
+    }
+
+    pub async fn reserve(
         &mut self,
         query: Arc<Q>,
         fork: ForkId,
         current_rev: Revision,
-        lock: Arc<RwLock<()>>
-    ) -> QueryCell<Q> {
+    ) -> Reservation {
         let idx = self.queries.get(&query).copied();
+
+        let (reservation, lock) = Reservation::new().await;
 
         match idx {
             None => {
                 let idx = self.cells.len();
 
                 let cell = QueryCell::calculating(fork, current_rev, idx, lock);
-                self.cells.push(cell.clone());
+                self.cells.push(cell);
                 self.queries.insert(query, idx);
-                cell
             }
             Some(idx) => {
                 let cell = &mut self.cells[idx];
                 cell.output = QueryOutput::Calculating(fork, current_rev, lock);
                 cell.rev = current_rev;
-
-                cell.clone()
             }
         }
+
+        reservation
     }
 
     pub fn insert_calculated(
@@ -343,9 +364,5 @@ impl<Q: Query> QueryStorage<Q> {
                 cell.clone()
             }
         }
-    }
-
-    pub fn contains_query(&self, query: &Q) -> bool {
-        self.queries.contains_key(query)
     }
 }

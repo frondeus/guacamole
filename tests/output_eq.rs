@@ -73,41 +73,43 @@ macro_rules! assert_query {
     };
 }
 
-#[tokio::test]
-async fn output_eq() {
+#[test]
+fn output_eq() {
     init_log();
 
     let system = Runtime::default();
 
-    tracing::info!("Set input");
-    system.set_input(File, "2+3".into()).await;
-    assert_query!(system, "R1", "2+3", File);
+    smol::run(async move {
+        tracing::info!("Set input");
+        system.set_input(File, "2+3".into()).await;
+        assert_query!(system, "R1", "2+3", File);
 
-    tracing::info!("Process once");
-    assert_query!(system, "R1", "2+3", ProcessParsed);
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
-    assert_eq!(PARSED.load(Ordering::SeqCst), 1, "Parsed count");
+        tracing::info!("Process once");
+        assert_query!(system, "R1", "2+3", ProcessParsed);
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
+        assert_eq!(PARSED.load(Ordering::SeqCst), 1, "Parsed count");
 
-    tracing::info!("Meaningless change");
-    system.set_input(File, "2 + 3".into()).await;
-    assert_query!(system, "R2", "2 + 3", File);
+        tracing::info!("Meaningless change");
+        system.set_input(File, "2 + 3".into()).await;
+        assert_query!(system, "R2", "2 + 3", File);
 
-    tracing::info!("Load cached");
-    assert_query!(system, "R1", "2+3", ProcessParsed);
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
-    assert_eq!(PARSED.load(Ordering::SeqCst), 2, "Parsed count");
+        tracing::info!("Load cached");
+        assert_query!(system, "R1", "2+3", ProcessParsed);
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
+        assert_eq!(PARSED.load(Ordering::SeqCst), 2, "Parsed count");
 
-    tracing::info!("Load cached 2");
-    assert_query!(system, "R2", "2+3", ProcessParsed);
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
-    assert_eq!(PARSED.load(Ordering::SeqCst), 2, "Parsed count");
+        tracing::info!("Load cached 2");
+        assert_query!(system, "R2", "2+3", ProcessParsed);
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 1, "Processed count");
+        assert_eq!(PARSED.load(Ordering::SeqCst), 2, "Parsed count");
 
-    tracing::info!("Meaningfull change");
-    system.set_input(File, "2 + 4".into()).await;
-    assert_query!(system, "R3", "2 + 4", File);
+        tracing::info!("Meaningfull change");
+        system.set_input(File, "2 + 4".into()).await;
+        assert_query!(system, "R3", "2 + 4", File);
 
-    tracing::info!("Process second time");
-    assert_query!(system, "R3", "2+4", ProcessParsed);
-    assert_eq!(PROCESSED.load(Ordering::SeqCst), 2, "Processed count");
-    assert_eq!(PARSED.load(Ordering::SeqCst), 3, "Parsed count");
+        tracing::info!("Process second time");
+        assert_query!(system, "R3", "2+4", ProcessParsed);
+        assert_eq!(PROCESSED.load(Ordering::SeqCst), 2, "Processed count");
+        assert_eq!(PARSED.load(Ordering::SeqCst), 3, "Parsed count");
+    });
 }

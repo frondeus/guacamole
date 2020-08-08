@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use guacamole::test_common::init_log;
 use guacamole::{Input, Query, Runtime, System};
+use smol::Task;
 
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
 struct A;
@@ -27,7 +28,7 @@ where
 
     async fn calc<S: System>(&self, system: &S) -> Self::Output {
         let o = system.query(self.0.clone()).await;
-        tokio::time::delay_for(tokio::time::Duration::from_secs(2)).await;
+        tokio::time::delay_for(tokio::time::Duration::from_millis(20)).await;
         o
     }
 }
@@ -53,14 +54,14 @@ impl Query for Add {
     type Output = String;
 
     async fn calc<S: System>(&self, system: &S) -> Self::Output {
-        let handle_a = tokio::spawn({
-            let system = system.fork();
-            async move { system.query_ref(LongQuery(A)).await }
-        });
-        let handle_b = tokio::spawn({
-            let system = system.fork();
-            async move { system.query_ref(LongQuery(B)).await }
-        });
+        let handle_a = system
+            .fork(|system| Task::spawn(async move { system.query_ref(LongQuery(A)).await }))
+            .await;
+
+        let handle_b = system
+            .fork(|system| Task::spawn(async move { system.query_ref(LongQuery(B)).await }))
+            .await;
+
         let (a, b) = futures::future::try_join(handle_a, handle_b).await.unwrap();
         format!("{} + {} + {}", *a, *b, self.c)
     }
@@ -79,31 +80,33 @@ macro_rules! assert_query {
     };
 }
 
-#[tokio::test]
-async fn parallel() {
+#[test]
+fn parallel() {
     init_log();
 
     let system = Runtime::default();
-    system.set_input(A, "2".into()).await;
-    system.set_input(B, "3".into()).await;
+    smol::run(async move {
+        system.set_input(A, "2".into()).await;
+        system.set_input(B, "3".into()).await;
 
-    assert_query!(system, "R1", "2", A);
-    assert_query!(system, "R2", "3", B);
+        assert_query!(system, "R1", "2", A);
+        assert_query!(system, "R2", "3", B);
 
-    // Calc it once
-    assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
+        // Calc it once
+        assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
 
-    // Reuse memoized output
-    assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
+        // Reuse memoized output
+        assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
 
-    // Different parameters means we have to calculate them again
-    assert_query!(system, "R2", "2 + 3 + 1", Add { c: 1 });
+        // Different parameters means we have to calculate them again
+        assert_query!(system, "R2", "2 + 3 + 1", Add { c: 1 });
 
-    // But then still we should be able to read memoized output.
-    assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
+        // But then still we should be able to read memoized output.
+        assert_query!(system, "R2", "2 + 3 + 4", Add { c: 4 });
 
-    system.set_input(A, "X".into()).await;
-    assert_query!(system, "R3", "X", A);
+        system.set_input(A, "X".into()).await;
+        assert_query!(system, "R3", "X", A);
 
-    assert_query!(system, "R3", "X + 3 + 4", Add { c: 4 });
+        assert_query!(system, "R3", "X + 3 + 4", Add { c: 4 });
+    });
 }

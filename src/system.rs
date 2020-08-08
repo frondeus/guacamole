@@ -1,8 +1,10 @@
 use crate::{Query, QueryRef};
 use async_trait::async_trait;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use futures::future::Abortable;
+use futures::Future;
 use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 #[async_trait]
 pub trait System: Send + Sync + 'static {
@@ -13,7 +15,11 @@ pub trait System: Send + Sync + 'static {
         Q: Query,
         Q::Output: Clone;
 
-    fn fork(&self) -> Self;
+    async fn fork<F, T>(&self, f: F) -> Abortable<T>
+    where
+        F: Send + Fn(Self) -> T,
+        T: Future + Send,
+        Self: Sized;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]

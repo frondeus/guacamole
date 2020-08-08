@@ -17,7 +17,10 @@ pub trait Query: 'static + Send + Sync + Hash + PartialEq + Eq + fmt::Debug {
 /// Input is a special kind of query that you can set up.
 /// Input:LData = Query::Output and it implements Default trait
 pub trait Input {
-    type Data: Send + Sync + Default + fmt::Debug + Eq;
+    type Data: Send + Sync + fmt::Debug + Eq;
+    fn on_uninitialized(&self) -> Self::Data {
+        panic!("Input uninitialized")
+    }
 }
 
 #[async_trait]
@@ -28,6 +31,6 @@ where
     type Output = I::Data;
 
     async fn calc<S: System>(&self, _system: &S) -> Self::Output {
-        I::Data::default()
+        self.on_uninitialized()
     }
 }
