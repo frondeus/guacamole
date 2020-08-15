@@ -14,9 +14,10 @@ Inspired by https://github.com/salsa-rs/salsa
 * Output tracking
 * Cycle detection
 * Strong consistency
+* Cancellation
 
-## TODO
-* [ ] Cancellation
+## TODO:
+* [ ] Interning
 
 ## Contribution
 Feel free to fork, create issues and PRs. I appreciate all kinds of contributions.
